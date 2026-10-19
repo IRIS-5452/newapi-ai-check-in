@@ -16,6 +16,7 @@ jobs:
 
       - name: Run MCII check-in
         env:
+          MCII_ACCOUNTS: ${{ secrets.MCII_ACCOUNTS }}
           MCII_USERNAME: ${{ secrets.MCII_USERNAME }}
           MCII_PASSWORD: ${{ secrets.MCII_PASSWORD }}
         run: python mcii/mcii_checkin.py
