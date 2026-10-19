@@ -140,6 +140,15 @@ jobs:
         # 执行签到
         uv run python -u main.py
 
+    - name: Report status
+      if: always()
+      env:
+        REPORT_URL: ${{ secrets.REPORT_URL }}
+        STATUS_TOKEN: ${{ secrets.STATUS_TOKEN }}
+        ACCOUNTS: ${{ secrets.ACCOUNTS }}
+        PROVIDERS: ${{ secrets.PROVIDERS }}
+      run: python monitor/report.py
+
     - name: 保存登录状态缓存
       if: hashFiles('storage-states/*.json') != ''
       uses: actions/cache/save@v4
