@@ -44,7 +44,27 @@ def curl_json(url: str, token: str, uid: str) -> dict | None:
         return None
 
 
-def check_site(origin: str, token: str, uid: str, month: str) -> dict:
+def compute_streak(records: list) -> int:
+    """从签到记录算连续天数（仅限本月，跨月会断）。"""
+    dates = sorted(
+        {r.get("checkin_date") for r in records if r.get("checkin_date")},
+        reverse=True,
+    )
+    if not dates:
+        return 0
+    streak = 1
+    prev = datetime.strptime(dates[0], "%Y-%m-%d").date()
+    for ds in dates[1:]:
+        cur = datetime.strptime(ds, "%Y-%m-%d").date()
+        if (prev - cur).days == 1:
+            streak += 1
+            prev = cur
+        else:
+            break
+    return streak
+
+
+def check_site(origin: str, token: str, uid: str, month: str, today: str) -> dict:
     info = curl_json(f"{origin}/api/user/self", token, uid) or {}
     data = info.get("data") or {}
     quota = data.get("quota")
@@ -53,6 +73,16 @@ def check_site(origin: str, token: str, uid: str, month: str) -> dict:
     st = curl_json(f"{origin}/api/user/checkin?month={month}", token, uid) or {}
     stats = (st.get("data") or {}).get("stats") or {}
     checked = stats.get("checked_in_today")
+    records = stats.get("records") or []
+
+    # 今日增量：优先取今天那条，取不到就取最近一条（各站日期边界不同）
+    today_award = None
+    for r in records:
+        if r.get("checkin_date") == today:
+            today_award = r.get("quota_awarded")
+            break
+    if today_award is None and records:
+        today_award = records[0].get("quota_awarded")
 
     ok = bool(info.get("success")) and (checked is not False)
     return {
@@ -60,6 +90,12 @@ def check_site(origin: str, token: str, uid: str, month: str) -> dict:
         "balance": balance,
         "checked_in": checked,
         "count": stats.get("checkin_count"),
+        "today_award": (
+            round(today_award / QUOTA_PER_UNIT, 2)
+            if isinstance(today_award, (int, float))
+            else None
+        ),
+        "streak": compute_streak(records),
         "reachable": bool(info.get("success")),
     }
 
@@ -91,10 +127,13 @@ def main() -> int:
         if not origin or not tok or not uid:
             rows.append({"name": name, "ok": False, "balance": None, "checked_in": None})
             continue
-        r = check_site(origin, tok, str(uid), month)
+        r = check_site(origin, tok, str(uid), month, date)
         r["name"] = name
         rows.append(r)
-        print(f"  {name:12} ok={r['ok']} checked_in={r['checked_in']} balance={r['balance']}")
+        print(
+            f"  {name:12} ok={r['ok']} checked={r['checked_in']} "
+            f"bal={r['balance']} award={r.get('today_award')} streak={r.get('streak')}"
+        )
 
     payload = {
         "date": date,
