@@ -68,7 +68,13 @@ def check_site(origin: str, token: str, uid: str, month: str, today: str) -> dic
     info = curl_json(f"{origin}/api/user/self", token, uid) or {}
     data = info.get("data") or {}
     quota = data.get("quota")
+    used = data.get("used_quota")
     balance = round(quota / QUOTA_PER_UNIT, 2) if isinstance(quota, (int, float)) else None
+
+    # 总额度 = 余额 + 已用，只在充值/签到时变，用来算消耗差值
+    total_ever = None
+    if isinstance(quota, (int, float)) and isinstance(used, (int, float)):
+        total_ever = round((quota + used) / QUOTA_PER_UNIT, 4)
 
     st = curl_json(f"{origin}/api/user/checkin?month={month}", token, uid) or {}
     stats = (st.get("data") or {}).get("stats") or {}
@@ -84,6 +90,12 @@ def check_site(origin: str, token: str, uid: str, month: str, today: str) -> dic
     if today_award is None and records:
         today_award = records[0].get("quota_awarded")
 
+    # 本月签到收益
+    month_award = sum(
+        r.get("quota_awarded", 0) for r in records
+        if isinstance(r.get("quota_awarded"), (int, float))
+    )
+
     ok = bool(info.get("success")) and (checked is not False)
     return {
         "ok": ok,
@@ -95,7 +107,9 @@ def check_site(origin: str, token: str, uid: str, month: str, today: str) -> dic
             if isinstance(today_award, (int, float))
             else None
         ),
+        "month_award": round(month_award / QUOTA_PER_UNIT, 2) if month_award else 0,
         "streak": compute_streak(records),
+        "total_ever": total_ever,
         "reachable": bool(info.get("success")),
     }
 
@@ -133,6 +147,32 @@ def main() -> int:
         print(
             f"  {name:12} ok={r['ok']} checked={r['checked_in']} "
             f"bal={r['balance']} award={r.get('today_award')} streak={r.get('streak')}"
+        )
+
+    # 取历史快照，算「今日消耗」「7 天消耗」
+    hist = curl_json(f"{base}/status?k={token}", "", "") or {}
+    snaps = hist.get("snapshots") or []
+    now_bj = datetime.now(BJ)
+    y_date = (now_bj - timedelta(days=1)).strftime("%Y-%m-%d")
+    w_date = (now_bj - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    def snap_map(d):
+        for s in snaps:
+            if s.get("date") == d:
+                return {a["name"]: a.get("total") for a in s.get("accounts", [])}
+        return {}
+
+    y_map, w_map = snap_map(y_date), snap_map(w_date)
+
+    for r in rows:
+        te = r.get("total_ever")
+        prev_d = y_map.get(r["name"])
+        prev_w = w_map.get(r["name"])
+        r["today_used"] = (
+            round(prev_d - te, 2) if te is not None and isinstance(prev_d, (int, float)) else None
+        )
+        r["week_used"] = (
+            round(prev_w - te, 2) if te is not None and isinstance(prev_w, (int, float)) else None
         )
 
     payload = {
