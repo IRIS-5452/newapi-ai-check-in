@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 UA = (
@@ -113,7 +114,38 @@ def main() -> int:
         cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     print(f"[report] {out.stdout.strip()[:200]} {out.stderr.strip()[:200]}")
+
+    push_if_failed(payload)
     return 0
+
+
+def push_if_failed(payload: dict) -> None:
+    """只在有站点失败时推送，避免每天骚扰。"""
+    bark = (os.environ.get("BARK_URL") or "").strip().rstrip("/")
+    if not bark or payload.get("ok"):
+        return
+
+    bad = [r for r in payload.get("accounts", []) if not r.get("ok")]
+    if not bad:
+        return
+
+    title = f"签到异常 {len(bad)}/{len(payload.get('accounts', []))}"
+    lines = []
+    for r in payload.get("accounts", []):
+        mark = "OK " if r.get("ok") else "FAIL"
+        bal = f"${r['balance']:.2f}" if isinstance(r.get("balance"), (int, float)) else "-"
+        lines.append(f"[{mark}] {r.get('name')} {bal}")
+    body = "\n".join(lines)
+
+    url = (
+        f"{bark}/{urllib.parse.quote(title)}/{urllib.parse.quote(body)}"
+        f"?group=checkin&level=timeSensitive"
+    )
+    res = subprocess.run(
+        ["curl", "-sS", "-m", "15", url],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    print(f"[bark] {res.stdout.strip()[:160]} {res.stderr.strip()[:160]}")
 
 
 if __name__ == "__main__":
