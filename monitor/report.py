@@ -71,10 +71,9 @@ def check_site(origin: str, token: str, uid: str, month: str, today: str) -> dic
     used = data.get("used_quota")
     balance = round(quota / QUOTA_PER_UNIT, 2) if isinstance(quota, (int, float)) else None
 
-    # 总额度 = 余额 + 已用，只在充值/签到时变，用来算消耗差值
-    total_ever = None
-    if isinstance(quota, (int, float)) and isinstance(used, (int, float)):
-        total_ever = round((quota + used) / QUOTA_PER_UNIT, 4)
+    # 消耗只能用 used_quota 的增量算：签到只加 quota，不影响 used
+    used_ever = round(used / QUOTA_PER_UNIT, 4) if isinstance(used, (int, float)) else None
+    quota_ever = round(quota / QUOTA_PER_UNIT, 4) if isinstance(quota, (int, float)) else None
 
     st = curl_json(f"{origin}/api/user/checkin?month={month}", token, uid) or {}
     stats = (st.get("data") or {}).get("stats") or {}
@@ -109,7 +108,8 @@ def check_site(origin: str, token: str, uid: str, month: str, today: str) -> dic
         ),
         "month_award": round(month_award / QUOTA_PER_UNIT, 2) if month_award else 0,
         "streak": compute_streak(records),
-        "total_ever": total_ever,
+        "used_ever": used_ever,
+        "quota_ever": quota_ever,
         "reachable": bool(info.get("success")),
     }
 
@@ -159,20 +159,33 @@ def main() -> int:
     def snap_map(d):
         for s in snaps:
             if s.get("date") == d:
-                return {a["name"]: a.get("total") for a in s.get("accounts", [])}
+                return {a["name"]: a for a in s.get("accounts", [])}
         return {}
 
     y_map, w_map = snap_map(y_date), snap_map(w_date)
 
     for r in rows:
-        te = r.get("total_ever")
-        prev_d = y_map.get(r["name"])
-        prev_w = w_map.get(r["name"])
+        used = r.get("used_ever")
+        quota = r.get("quota_ever")
+        py = y_map.get(r["name"]) or {}
+        pw = w_map.get(r["name"]) or {}
+
+        # 消耗 = used 的增量（签到不影响 used）
         r["today_used"] = (
-            round(prev_d - te, 2) if te is not None and isinstance(prev_d, (int, float)) else None
+            round(used - py["used"], 2)
+            if isinstance(used, (int, float)) and isinstance(py.get("used"), (int, float))
+            else None
         )
         r["week_used"] = (
-            round(prev_w - te, 2) if te is not None and isinstance(prev_w, (int, float)) else None
+            round(used - pw["used"], 2)
+            if isinstance(used, (int, float)) and isinstance(pw.get("used"), (int, float))
+            else None
+        )
+        # 余额变化（7 天）
+        r["week_balance_delta"] = (
+            round(quota - pw["quota"], 2)
+            if isinstance(quota, (int, float)) and isinstance(pw.get("quota"), (int, float))
+            else None
         )
 
     payload = {
