@@ -147,6 +147,7 @@ jobs:
         STATUS_TOKEN: ${{ secrets.STATUS_TOKEN }}
         ACCOUNTS: ${{ secrets.ACCOUNTS }}
         PROVIDERS: ${{ secrets.PROVIDERS }}
+        BARK_URL: ${{ secrets.BARK_URL }}
       run: python monitor/report.py
 
     - name: 保存登录状态缓存
