@@ -1,0 +1,20 @@
+name: PoW 站点签到
+
+on:
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run PoW check-in
+        env:
+          POW_ACCOUNTS: ${{ secrets.POW_ACCOUNTS }}
+        run: python pow/pow_checkin.py
