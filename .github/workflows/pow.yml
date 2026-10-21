@@ -17,4 +17,6 @@ jobs:
       - name: Run PoW check-in
         env:
           POW_ACCOUNTS: ${{ secrets.POW_ACCOUNTS }}
+          REPORT_URL: ${{ secrets.REPORT_URL }}
+          STATUS_TOKEN: ${{ secrets.STATUS_TOKEN }}
         run: python pow/pow_checkin.py
