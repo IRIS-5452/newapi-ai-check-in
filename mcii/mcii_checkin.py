@@ -59,11 +59,15 @@ class Session:
                 return exc.code, {"error": raw[:300]}
 
 
-def run_one(username: str, password: str, today: str) -> bool:
+def run_one(username: str, password: str, today: str) -> dict:
     label = f"[{username}]"
+
+    def res(ok: bool, **kw) -> dict:
+        return {"name": username, "ok": ok, **kw}
+
     if not username or not password:
         print(f"{label} missing username/password, skipped")
-        return False
+        return res(False, error="missing credentials")
 
     s = Session()
     status, data = s.call(
@@ -72,14 +76,14 @@ def run_one(username: str, password: str, today: str) -> bool:
     )
     if status != 200 or not data.get("authenticated"):
         print(f"{label} login failed (HTTP {status}): {data.get('error') or data}")
-        return False
+        return res(False, error=f"login HTTP {status}")
     uid = (data.get("user") or {}).get("id")
     print(f"{label} logged in as {data.get('username')} (id={uid})")
 
     status, me = s.call("GET", "/api/v1/me")
     if status != 200:
         print(f"{label} cannot read profile (HTTP {status}): {me.get('error') or me}")
-        return False
+        return res(False, error=f"profile HTTP {status}")
     user = me.get("user") or me
     checkin_on = user.get("checkin_on") or ""
     print(
@@ -88,32 +92,81 @@ def run_one(username: str, password: str, today: str) -> bool:
         f"checkin_on={checkin_on or 'never'} expires={user.get('subscription_expires_at')}"
     )
 
+    base_kw = {
+        "xp": user.get("xp"),
+        "level": user.get("level"),
+        "streak": user.get("checkin_streak"),
+        "expires": user.get("subscription_expires_at"),
+    }
+
     if checkin_on == today:
         print(f"{label} already checked in today, skip")
-        return True
+        return res(True, checked_in=True, **base_kw)
 
-    status, res = s.call("POST", "/api/v1/me/checkin", {"confirm_partial": False})
+    status, resd = s.call("POST", "/api/v1/me/checkin", {"confirm_partial": False})
     if status != 200:
-        print(f"{label} check-in failed (HTTP {status}): {res.get('error') or res}")
-        return False
+        print(f"{label} check-in failed (HTTP {status}): {resd.get('error') or resd}")
+        return res(False, error=f"checkin HTTP {status}", **base_kw)
 
-    if res.get("needs_confirmation"):
+    if resd.get("needs_confirmation"):
         print(f"{label} partial confirmation required, resending")
-        status, res = s.call("POST", "/api/v1/me/checkin", {"confirm_partial": True})
+        status, resd = s.call("POST", "/api/v1/me/checkin", {"confirm_partial": True})
         if status != 200:
-            print(f"{label} confirmed check-in failed (HTTP {status}): {res.get('error') or res}")
-            return False
+            print(f"{label} confirmed check-in failed (HTTP {status}): {resd.get('error') or resd}")
+            return res(False, error="confirm failed", **base_kw)
 
-    print(f"{label} check-in OK: {json.dumps(res, ensure_ascii=False)[:220]}")
+    print(f"{label} check-in OK: {json.dumps(resd, ensure_ascii=False)[:220]}")
 
-    status, me = s.call("GET", "/api/v1/me")
+    status, me2 = s.call("GET", "/api/v1/me")
     if status == 200:
-        user = me.get("user") or me
+        u2 = me2.get("user") or me2
         print(
-            f"{label} after: xp={user.get('xp')} streak={user.get('checkin_streak')} "
-            f"expires={user.get('subscription_expires_at')}"
+            f"{label} after: xp={u2.get('xp')} streak={u2.get('checkin_streak')} "
+            f"expires={u2.get('subscription_expires_at')}"
         )
-    return True
+        base_kw.update({
+            "xp": u2.get("xp"),
+            "level": u2.get("level"),
+            "streak": u2.get("checkin_streak"),
+            "expires": u2.get("subscription_expires_at"),
+        })
+    return res(True, checked_in=True, **base_kw)
+
+
+def report_mcii(results: list) -> None:
+    """把 MCII 多账号结果合并成一条，回报给看板。"""
+    base = (os.environ.get("REPORT_URL") or "").rstrip("/")
+    token = os.environ.get("STATUS_TOKEN") or ""
+    if not base or not token or not results:
+        return
+
+    total = len(results)
+    okn = sum(1 for r in results if r.get("ok"))
+    main_acc = results[0] if results else {}
+    streak = main_acc.get("streak") or 0
+    xp = main_acc.get("xp") or 0
+    level = main_acc.get("level") or 0
+
+    payload = [{
+        "name": "MCII",
+        "ok": okn == total and total > 0,
+        "checked_in": all(r.get("checked_in") for r in results),
+        "balance": None,
+        "note": f"{okn}/{total} 号 · Lv{level} · 连签 {streak} 天 · {xp} XP",
+    }]
+    body = {
+        "date": datetime.now(BJ).strftime("%Y-%m-%d"),
+        "workflow": "mcii.yml",
+        "accounts": payload,
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    res = subprocess.run(
+        ["curl", "-sS", "-m", "20", "-X", "POST", f"{base}/report?k={token}",
+         "-H", "Content-Type: application/json",
+         "-d", json.dumps(body, ensure_ascii=False)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    print(f"[report] {res.stdout.strip()[:160]}")
 
 
 def main() -> int:
@@ -141,15 +194,20 @@ def main() -> int:
     print(f"[*] accounts={len(accounts)}  target date (UTC+8)={today}")
 
     ok = 0
+    results = []
     for acc in accounts:
         try:
-            if run_one(acc.get("username", ""), acc.get("password", ""), today):
+            r = run_one(acc.get("username", ""), acc.get("password", ""), today)
+            results.append(r)
+            if r.get("ok"):
                 ok += 1
         except Exception as exc:
             print(f"[{acc.get('username')}] exception: {exc}")
+            results.append({"name": acc.get("username") or "unnamed", "ok": False})
         print("-" * 50)
 
     print(f"[=] success {ok}/{len(accounts)}")
+    report_mcii(results)
     return 0 if ok > 0 else 1
 
 
