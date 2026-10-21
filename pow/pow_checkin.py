@@ -124,6 +124,27 @@ def run_one(acc: dict, month: str) -> dict:
     }
 
 
+def report(results: list, workflow: str) -> None:
+    """把结果回报给 Cloudflare Worker 看板。"""
+    base = (os.environ.get("REPORT_URL") or "").rstrip("/")
+    token = os.environ.get("STATUS_TOKEN") or ""
+    if not base or not token or not results:
+        return
+    body = {
+        "date": datetime.now(BJ).strftime("%Y-%m-%d"),
+        "workflow": workflow,
+        "accounts": results,
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    res = subprocess.run(
+        ["curl", "-sS", "-m", "20", "-X", "POST", f"{base}/report?k={token}",
+         "-H", "Content-Type: application/json",
+         "-d", json.dumps(body, ensure_ascii=False)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    print(f"[report] {res.stdout.strip()[:160]}")
+
+
 def main() -> int:
     raw = os.environ.get("POW_ACCOUNTS", "").strip()
     if not raw:
@@ -139,16 +160,20 @@ def main() -> int:
     print(f"[*] accounts={len(accounts)} month={month}")
 
     ok = 0
+    results = []
     for acc in accounts:
         try:
             r = run_one(acc, month)
+            results.append(r)
             if r.get("ok"):
                 ok += 1
         except Exception as exc:
             print(f"[{acc.get('name')}] exception: {exc}")
+            results.append({"name": acc.get("name") or "unnamed", "ok": False})
         print("-" * 50)
 
     print(f"[=] success {ok}/{len(accounts)}")
+    report(results, "pow.yml")
     return 0 if ok > 0 else 1
 
 
