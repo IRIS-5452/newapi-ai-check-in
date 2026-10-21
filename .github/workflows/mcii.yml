@@ -19,4 +19,6 @@ jobs:
           MCII_ACCOUNTS: ${{ secrets.MCII_ACCOUNTS }}
           MCII_USERNAME: ${{ secrets.MCII_USERNAME }}
           MCII_PASSWORD: ${{ secrets.MCII_PASSWORD }}
+          REPORT_URL: ${{ secrets.REPORT_URL }}
+          STATUS_TOKEN: ${{ secrets.STATUS_TOKEN }}
         run: python mcii/mcii_checkin.py
